@@ -1,0 +1,17 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  Household segregation in saturated housing markets:
+  Master's thesis code
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Gaia
+    family-names: Peressini
+repository-code: 'https://github.com/GaiaPeressini/household_segregation'
+license: CC-BY-4.0
+date-released: '2023-09-04'
