@@ -1,3 +1,5 @@
+# --Code based on Pablo Bello's work--
+
 trace_splits <- function(iter_splits, current_vac_splits, current_year_splits) {
   
   max_iter_splits <- 10
@@ -69,7 +71,7 @@ trace_splits <- function(iter_splits, current_vac_splits, current_year_splits) {
       print(paste("iter", iter_splits))
     }
     
-    # Replacers come from more than 1 apartment --> break
+    # Replacers come from more than 1 apartment --> break  (changed from trace_chain_function)
     if (length(unique(replacers_splits$from_lgh)) > 1) {
       
       replacers_splits[,chain_step := iter_splits]
