@@ -16,3 +16,6 @@ This work is licensed under a
 
 ## Notes on the code
 The names of the variables were changed to reflect their content in the SCB datasets.
+
+R version used: 4.3.0 (Already Tomorrow)
+RStudio version used: 2023.06.0+421 (Mountain Hydrangea)
