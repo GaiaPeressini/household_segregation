@@ -1,0 +1,986 @@
+---
+title: "Classify first moves and chains"
+author: "Gaia Peresini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE)
+```
+
+```{r}
+# Libraries
+library(tidyverse)
+library(data.table)
+```
+
+
+# Add metadata to vcs dataset (es:DeSO ID, prop_swe, Lisa, segregation degree)
+
+```{r}
+# Load datasets
+lgh_info <- readRDS(file = "//.../lgh_info.rds")
+geo_dt <- readRDS(file = "//.../Original_dt/geo_dt.rds")
+deso_stats <- readRDS(file = "//.../deso_stats.rds")
+bkg_dt <- readRDS(file="//.../Original_dt/bkg_dt.rds")
+vcs <- readRDS(file="//.../vcs.rds") %>%
+  as.data.table(vcs) %>%
+  rename(absorption = abs,
+         initiation = init) 
+
+# Computing segregating effects
+# some lgh_id have more than one corresponding DESO --> keep only one
+geo_dt2 <- 
+  geo_dt %>%
+  drop_na(LopNr_RNPLGH_RIDLGH) %>% 
+  transmute(lgh_id = LopNr_RNPLGH_RIDLGH, DESO = BostDESO) %>% 
+  distinct(.,lgh_id, .keep_all = T)
+
+vcs <- 
+  vcs %>% 
+  left_join(geo_dt2 %>% 
+              rename(from_lgh = lgh_id,
+                     from_DESO = DESO), by = "from_lgh") %>% 
+  left_join(geo_dt2 %>% 
+              transmute(to_lgh = lgh_id,
+                        to_DESO = DESO), by = "to_lgh") %>% 
+  
+  
+  # - add properties about DESO 
+  
+  left_join(deso_stats %>% 
+              rename(from_DESO_prop_swe = prop_swe,
+                     from_DESO = BostDESO,
+                     from_DESO_mean_edu = mean_edu, 
+                     from_DESO_mean_inc = mean_inc,
+                     from_ar = Ar), by = c("from_ar", "from_DESO")) %>% 
+  left_join(deso_stats %>% 
+              rename(to_DESO_prop_swe = prop_swe,
+                     to_DESO = BostDESO,
+                     to_DESO_mean_edu = mean_edu, 
+                     to_DESO_mean_inc = mean_inc,
+                     from_ar = Ar),by = c("from_ar", "to_DESO")) %>% 
+  # - add property about Ego 
+  left_join(bkg_dt, by = "PersonLopNr") %>%
+  select(-LandKod, -FodelseAr)
+
+vcs <- 
+  vcs %>%
+  mutate(within_move = ifelse(from_DESO == to_DESO,TRUE,FALSE)) %>% #move within same DESO
+  mutate(seg_move = case_when(within_move == TRUE ~ 0,              # no seg or deseg: within move
+                              within_move == FALSE & from_DESO_prop_swe == to_DESO_prop_swe  ~ 0,  # no seg or deseg: move to deso with same prop_swe
+                              within_move == FALSE & swe_born==1 & to_DESO_prop_swe > from_DESO_prop_swe  ~ 1, #segreg: swe that moves to deso with higher prop_swe
+                              within_move == FALSE & swe_born==1 & to_DESO_prop_swe < from_DESO_prop_swe  ~ -1, #desegreg: swe that moves to deso with lower prop_swe
+                              within_move == FALSE & swe_born==0 & to_DESO_prop_swe > from_DESO_prop_swe  ~ -1, #desegreg: non_swe that moves to deso with higher prop_swe
+                              within_move == FALSE & swe_born==0 & to_DESO_prop_swe < from_DESO_prop_swe  ~ 1),   #segreg: non_swe that moves to deso with lower prop_swe
+         degree = to_DESO_prop_swe - from_DESO_prop_swe) %>%
+  mutate(degree = ifelse(test = swe_born == 0, yes = -1*degree, no = degree)) # invert sign for people not born in Sweden
+
+
+saveRDS(vcs, file = "//.../vcs_complete.rds")
+
+```
+
+
+## Some statistics about the vcs with the 3 types of initiation
+
+```{r}
+# --Code based on Pablo Bello's work--
+
+# Load files
+vcs <- readRDS(file="//.../vcs_complete.rds")
+lgh_info <- readRDS(file = "//.../lgh_info.rds")
+bkg_dt <- readRDS(file="//.../Original_dt/bkg_dt.rds")
+
+
+zero_length_chains <- 
+  vcs %>%
+  mutate(chain_step = ifelse(is.na(chain_step) == TRUE, 0,chain_step)) %>%
+  group_by(vc_nr) %>% 
+  summarise(length = max(chain_step)) %>% 
+  filter(length == 0) %>%
+  pull(vc_nr)
+
+
+# Number of seg/deseg moves (rough estimate of segregation for now). 
+seg_effect <- 
+  vcs %>% 
+  drop_na(chain_step) %>%
+  mutate(seg= ifelse(seg_move == 1,1,0),
+         deseg = ifelse(seg_move == -1,1,0),
+         within = ifelse(seg_move == 0,1,0)) %>%
+  group_by(vc_nr) %>%
+  summarise(overall_seg = sum(seg_move,na.rm = TRUE),
+            seg = sum(seg),
+            deseg = sum(deseg),
+            within = sum(within))
+
+# First move Segregating or desegragating?
+first_move <- 
+  vcs %>%
+  filter(chain_step == 1) %>%
+  group_by(vc_nr) %>%
+  summarise(seg_first_move = sum(seg_move))
+
+
+# Number of individuals that jump between DeSOs in the chain
+jumps <-
+  vcs %>%
+  mutate(jump = ifelse(within_move == TRUE,0,1)) %>%
+  group_by(vc_nr) %>%
+  summarise(jumps = sum(jump))
+
+
+# First vacancy in the chain
+lgh_init <- 
+  vcs %>%
+  filter(chain_step == 1) %>% 
+  group_by(vc_nr) %>% 
+  summarise(lgh_init = unique(to_lgh), lgh_DESO = unique(to_DESO)) %>% 
+  left_join(lgh_info %>% 
+              rename(lgh_init = lgh_id,
+                     kommun = Kommun),
+            by = "lgh_init")
+
+# First movers in the chain
+pers_init <- 
+  vcs %>%
+  filter(chain_step == 1) %>%
+  select(vc_nr,PersonLopNr) %>% 
+  left_join(bkg_dt, by = "PersonLopNr") %>%
+  drop_na(swe_born) %>%
+  group_by(vc_nr) %>% 
+  summarise(hh_born  = case_when(sum(swe_born) == n() ~ "swedish",
+                                 sum(swe_born) < n() & sum(swe_born) > 0 ~ "mixed",
+                                 sum(swe_born) == 0 ~ "non_swedish"))
+
+# Merge everything together
+vcs_tbl <- 
+  vcs %>% 
+  mutate(chain_step = ifelse(vc_nr %in% zero_length_chains == TRUE,0,chain_step),
+         absorption = ifelse(vc_nr %in% zero_length_chains == TRUE,"zero_length_chain",absorption),
+         split = ifelse(is.na(split) == TRUE, 0, split)) %>% 
+  group_by (vc_nr) %>%
+  summarise(chain_length = max(chain_step,na.rm = TRUE),
+            splits = max(split,na.rm = TRUE),
+            absorption = unique(na.omit(absorption)),
+            initiation = unique(na.omit(initiation)),
+            year_init = min(from_ar,na.rm = TRUE)) %>%
+  left_join(lgh_init, by = "vc_nr") %>% 
+  left_join(pers_init, by = "vc_nr") %>% 
+  left_join(seg_effect, by = "vc_nr") %>%
+  left_join(first_move, by = "vc_nr") %>%
+  left_join(jumps, by = "vc_nr") %>%
+  mutate(hh_born = factor(hh_born, levels = c("swedish","non_swedish","mixed")))
+
+# Save as RDS to keep list-column for absorption type
+saveRDS(vcs_tbl,file = "//.../vcs_tbl.rds")
+
+#####################
+zl <- vcs %>% filter(vc_nr %in% zero_length_chains)
+zl %>% count(absorption)
+zl %>% count(initiation)
+
+vcs %>% filter(vc_nr %in% zero_length_chains & initiation == "new_apartment")
+
+###########################
+# Descriptives of segregating moves
+
+# Distribution of segregation effects
+
+seg_effect %>%
+  pivot_longer(cols = c(seg,deseg,within,overall_seg),names_to = "seg_effect",values_to = "value") %>%
+  ggplot(aes(value, group = seg_effect, fill = seg_effect)) +
+  geom_histogram() +
+  theme_minimal() +
+  facet_wrap(~ seg_effect, scales = "free")
+
+
+seg_effect %>%
+  #slice_sample(prop = 0.2) %>%
+  ggplot(aes(seg,deseg)) +
+  geom_jitter(alpha = 0.1) +
+  geom_smooth(method = "lm") 
+
+summary(vcs_tbl)
+
+```
+
+
+```{r}
+library(knitr)
+library(kableExtra)
+library(janitor)
+
+
+# N. seg/deseg fist moves by type of initiation
+first_move_byinit <- vcs[chain_step == 1] %>% 
+  group_by(initiation) %>%
+  count(seg_move) %>%
+   mutate(Move = ifelse(seg_move == -1, "Desegregating", ifelse(seg_move == 1, "Segregating", "Within")),
+         Initiation = ifelse(initiation == "deceased", "Deceased", 
+                             ifelse(initiation == "new_apartment", "New apartment", "Out move"))) %>%
+  rename(Count = n) %>%
+  relocate(Initiation, Move, Count) 
+
+table_vcs_3 <- first_move_byinit[,2:3] %>%
+  kbl(booktabs = T, escape = F, type = "text",
+      caption = "Classification of first moves by type of initiation") %>%
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position")) %>%
+  group_rows("Deceased", 1,4) %>%
+  group_rows("New apartment", 5, 8) %>%
+  group_rows("Out move", 9, 12) 
+writeLines(table_vcs_3, "table_vcs_3.tex")
+
+vcs_3 <- vcs[chain_step == 1] %>%
+  mutate(Move = ifelse(seg_move == -1, "Desegregating", ifelse(seg_move == 1, "Segregating", "Within")),
+         initiation = ifelse(initiation == "deceased", "Deceased", 
+                             ifelse(initiation == "new_apartment", "New apartment", "Out move"))) %>%
+  tabyl(initiation, Move) %>%
+  adorn_percentages(denominator = "row") %>%
+  adorn_totals(where = "col") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_ns() %>%
+  kbl(booktabs = T, escape = F, 
+      caption = "Classification of first moves by type of initiation", 
+      col.names = c("VC initiation", "Desegregating", "Segregating", "Within", "NA", "Total"),
+      type = "text") %>% #format = "latex" or type = "text"
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position")) %>%
+  add_header_above(c(" " = 1, "First move"=4, " "=1))
+writeLines(vcs_3, "vcs_3.tex")
+
+```
+
+
+## Subset vcs with initiation = new apartment
+
+```{r}
+vcs <- readRDS(file="//.../vcs_complete.rds")
+
+vcs_new <- vcs %>%
+  mutate(move = ifelse(test = degree > 0, yes = "seg", 
+                       no = ifelse(test = degree < 0, yes = "deseg", no = "same_deso"))) %>%
+  filter(initiation == "new_apartment",
+         is.na(move) == FALSE) %>%
+  mutate(move = as.factor(move),
+         move = fct_relevel(move, c("deseg", "seg", "same_deso")))
+
+# First move Segregating or desegragating?
+first_move_new <- 
+  vcs_new %>%
+  filter(chain_step == 1) %>%
+  group_by(from_DESO) %>%
+  count(move) 
+
+vcs_new %>%
+  filter(chain_step ==1) %>%
+  group_by(move) %>%
+  count(move)
+
+
+# Splits (absoption) in each step
+vcs %>%
+  filter(absorption == "split") %>%
+  count(chain_step)
+  #count()
+
+#tot / n of vcs
+nrow(vcs %>%
+  filter(absorption == "split")) / nrow(vcs) * 100 
+
+```
+
+
+## RQ1: Analysis of first moves
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+
+
+#### INCOME #####
+# Group by origin DeSO income decile
+deso_stats <- readRDS(file="//.../deso_stats.rds")
+
+deso_stats <- deso_stats %>%
+  group_by(Ar) %>%
+  mutate(decile = ntile(mean_inc, 10) # assign income decile to each DeSO
+         )
+
+
+vcs_income <- vcs_new %>%
+  left_join(deso_stats %>%
+              select(BostDESO, Ar, decile), 
+            by=c("from_DESO"="BostDESO", "from_ar"="Ar")) %>% #add income decile 
+  rename(inc_decile = decile) 
+
+
+# First move Segregating or desegragating? (by income decile)
+first_move_new_inc <- 
+  vcs_income %>%
+  filter(chain_step == 1) %>%
+  group_by(inc_decile) %>%
+  count(move) 
+
+
+theme_set(theme_bw())
+inc_1 <- first_move_new_inc %>%
+  ggplot(aes(inc_decile, n, color=move, shape=move)) +
+  geom_point() +
+  geom_smooth(se=F)+
+  scale_x_continuous(breaks = seq(1, 10)) +
+  scale_shape_discrete(name="Type", labels=c("Desegregating", "Segregating", "Within")) +
+  scale_color_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                     palette = "Set2") +
+  labs(title = "First moves types per income decile of DeSO of origin", 
+       caption = "Data from Statistics Sweden") + 
+  xlab("Income decile")
+ggsave("income_orig1.pdf", width = 7, height = 5)
+
+# same graph but with sum of degree by income decile
+inc_2 <- vcs_income %>%
+  filter(chain_step == 1) %>%
+  group_by(inc_decile) %>%
+  summarise(sum_degree = sum(degree)) %>%
+  ggplot(aes(inc_decile, sum_degree)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(1, 10)) +
+  scale_color_brewer(palette="Set2") +
+  labs(title = "Segregating degree of first moves per income decile of DeSO of origin", 
+       caption = "Data from Statistics Sweden") + 
+  xlab("Income decile") +
+  ylab("Degree")
+ggsave("income_orig2.pdf", width = 7, height = 5)
+
+income <- ggarrange(inc_1, inc_2, nrow = 2)
+ggexport(income,filename = "income.pdf")
+
+
+#### INCOME-destination #####
+# Group by destination DeSO income decile
+
+vcs_income_dest <- vcs_new %>%
+  left_join(deso_stats %>%
+              select(BostDESO, Ar, decile), 
+            by=c("to_DESO"="BostDESO", "from_ar"="Ar")) %>% #add income decile 
+  rename(inc_decile = decile) 
+
+# First move Segregating or desegragating? (by income decile)
+first_move_new_inc_d <- 
+  vcs_income_dest %>%
+  filter(chain_step == 1) %>%
+
+  group_by(inc_decile) %>%
+  count(move) 
+
+theme_set(theme_bw())
+first_move_new_inc_d %>%
+  ggplot(aes(inc_decile, n, color=move, shape=move)) +
+  geom_point() +
+  geom_smooth(se=F) +
+  scale_x_continuous(breaks = seq(1, 10)) +
+  scale_shape_discrete(name="Type", labels=c("Desegregating", "Segregating", "Within")) +
+  scale_color_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                     palette = "Set2") +
+  theme(legend.position = "bottom") +
+  # labs(title = "First moves types per income decile",
+  #      subtitle = "Based on DeSO of destination",
+  #      caption = "Data from Statistics Sweden") + 
+  xlab("Income decile")
+ggsave("income_dest1.pdf", width = 5, height = 4)
+
+# same graph but with sum of degree by income decile
+theme_set(theme_bw())
+vcs_income_dest %>%
+  filter(chain_step == 1) %>%
+  group_by(inc_decile) %>%
+  summarise(sum_degree = sum(degree)) %>%
+  ggplot(aes(inc_decile, sum_degree)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(1, 10)) +
+  scale_color_brewer(palette="Set2") +
+  xlab("Income decile") +
+  ylab("Degree")
+ggsave("income_dest2.pdf", width = 5, height = 4)
+
+
+#### EDUCATION #####
+lisa_dt <- readRDS(file = "//.../Original_dt/lisa_dt.rds") %>%
+  mutate(Ar = as.integer(Ar))
+
+vcs_edu <- vcs_new %>%
+  left_join(lisa_dt[,.(PersonLopNr, from_ar = Ar, ma_above)], by = c("PersonLopNr", "from_ar"))
+
+# First move Segregating or desegragating? (by education)
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(ma_above) %>%
+  count(move) %>%
+  mutate(ma_above = as.factor(ma_above)) %>%
+  ggplot(aes(ma_above, n, color=move, shape=move)) +
+  geom_point() +
+  geom_smooth(method = "lm", fullrange=T, se=F) 
+
+##############
+library(RColorBrewer)
+brewer.pal(3, "Set2")
+##############
+
+edu_1 <- vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(ma_above) %>%
+  mutate(ma_above = as.factor(ma_above)) %>%
+  ggplot(aes(move,fill=ma_above)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(name="Type", labels=c("Desegregating", "Segregating", "Within")) +
+  scale_fill_brewer(name="Education", labels=c("Lower", "Higher", "NA"), na.value="#8DA0CB", 
+                    palette = "Set2")+ 
+  labs(title = "First moves types per education", 
+       caption = "Data from Statistics Sweden") + 
+  ylab("n")
+ggsave("edu1.pdf", width = 7, height = 5)
+  
+
+# same graph but with sum of degree by edu
+edu_2 <- vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(ma_above) %>%
+  summarise(sum_degree = sum(degree),
+            mean_degree = mean(degree)) %>%
+  kbl(booktabs = T, escape = F, type= "latex",
+      caption = "Education") %>%
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position"))
+writeLines(edu_2, "edu_2.tex")
+
+ggexport(edu_1, filename = "edu_1.pdf")
+
+# distribution of moves by education
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(ma_above) %>%
+  mutate(ma_above = as.factor(ma_above)) %>%
+  ggplot(aes(ma_above, fill=move)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(name="Education", labels=c("Lower", "Higher", "NA")) +
+  scale_fill_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                    palette = "Set2")+ 
+  theme(legend.position = "bottom") +
+  ylab("n")
+ggsave("edu3.pdf", width = 5, height = 4)
+
+education <- ggarrange(edu_1, edu_3, nrow = 2)
+ggexport(education,filename = "education.pdf")
+
+
+#### GENDER ######
+# First move Segregating or desegragating? (by gender)
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(Kon) %>%
+  count(move)
+
+gen_1 <- vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(Kon) %>%
+  mutate(Kon = as.factor(Kon)) %>%
+  ggplot(aes(move, fill=Kon)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(name="Type", labels=c("Desegregating", "Segregating", "Within")) +
+  scale_fill_brewer(name="Sex", labels=c("Male", "Female"), 
+                    palette = "Set2")+ 
+  labs(title = "First moves types per sex", 
+       caption = "Data from Statistics Sweden") + 
+  ylab("n")
+ggsave("gen1.pdf", width = 7, height = 5)
+
+# same graph but with sum of degree by edu
+gen_2 <- vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(Kon) %>%
+  summarise(sum_degree = sum(degree),
+            mean_degree = mean(degree)) %>%
+  kbl(booktabs = T, escape = F, type= "latex",
+      caption = "Gender") %>%
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position"))
+writeLines(gen_2, "gen_2.tex")
+
+# distribution of moves by sex
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(Kon) %>%
+  mutate(Kon = as.factor(Kon)) %>%
+  ggplot(aes(Kon, fill=move)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(name="Sex", labels=c("Male", "Female")) +
+  scale_fill_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                    palette = "Set2")+ 
+  theme(legend.position = "bottom") +
+  ylab("n")
+ggsave("gen3.pdf", width = 5, height = 4)
+
+
+#### COUNTRY OF BIRTH ######
+# First move Segregating or desegragating? (by country of birth)
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(swe_born) %>%
+  count(move)
+
+# distribution of moves by country of birth
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(swe_born) %>%
+  mutate(swe_born = as.factor(swe_born)) %>%
+  ggplot(aes(swe_born, fill=move)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(name="Born in Sweden", labels=c("No", "Yes")) +
+  scale_fill_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                    palette = "Set2")+ 
+  theme(legend.position = "bottom") +
+  ylab("n")
+ggsave("swe3.pdf", width = 5, height = 4)
+
+# same graph but with sum of degree by edu
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  group_by(swe_born) %>%
+  summarise(sum_degree = sum(degree),
+            mean_degree = mean(degree)) %>%
+  kbl(booktabs = T, escape = F, type= "text", #text="latex" for write lines
+      caption = "Country of birth") %>%
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position"))
+
+```
+
+
+```{r}
+# Scatter plots
+
+# Overall
+vcs_new %>%
+  filter(chain_step == 1) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point() +
+    geom_smooth(method = "lm") + 
+    labs(title="First moves")
+ggsave("scatter_tot.pdf")
+
+# Education
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  mutate(ma_above = recode(ma_above, "0"="Lower", "1"="Higher")) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    facet_wrap(vars(ma_above)) + 
+    labs(title="First moves by education") +
+  xlab("Proportion of people born in Sweden (%)") +
+  ylab("Degree of segregation")
+ggsave("scatter_edu.pdf", width = 7, height = 5)
+
+# Income (origin)
+vcs_income %>%
+  filter(chain_step == 1) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    facet_wrap(vars(inc_decile)) + 
+    labs(title="First moves by income decile")
+ggsave("scatter_income.pdf")
+
+vcs_income %>%
+  filter(chain_step == 1) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point(data = transform(vcs_income %>%
+                                  filter(chain_step == 1),
+                                inc_decile=NULL), color="grey") +
+    geom_point() +
+    facet_wrap(vars(inc_decile), ncol=5) + 
+    labs(title="First moves by income decile of DeSO of origin") +
+  xlab("Proportion of people born in Sweden (%)") +
+  ylab("Degree of segregation")
+ggsave("scatter_income2.pdf", useDingbats=TRUE, width = 7, height = 5)
+
+# Income (destination)
+vcs_income_dest %>%
+  filter(chain_step == 1) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    facet_wrap(vars(inc_decile)) + 
+    labs(title="First moves by income decile of destination")
+ggsave("scatter_income_dest.pdf")
+
+vcs_income_dest %>%
+  filter(chain_step == 1) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point(data = transform(vcs_income_dest %>%
+                                  filter(chain_step == 1),
+                                inc_decile=NULL), color="grey") +
+    geom_point() +
+    facet_wrap(vars(inc_decile), ncol=5) + 
+    labs(title="First moves by income decile of DeSO of destination") +
+  xlab("Proportion of people born in Sweden (%)") +
+  ylab("Degree of segregation")
+ggsave("scatter_income_dest2.pdf", useDingbats=TRUE, width = 7, height = 5)
+
+# Gender
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  mutate(Kon = recode(Kon, "1"="Male", "2"="Female")) %>%
+  ggplot(aes(x = to_DESO_prop_swe, y=degree)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    facet_wrap(vars(Kon)) + 
+    labs(title="First moves by sex") +
+  xlab("Proportion of people born in Sweden (%)") +
+  ylab("Degree of segregation")
+ggsave("scatter_gender.pdf", width = 7, height = 5)
+
+
+```
+
+
+### Logistic regression (RQ1)
+
+```{r}
+# vcs_reg <- vcs_new %>%
+#   left_join(deso_stats %>% 
+#               select(BostDESO, Ar, decile), 
+#             by=c("to_DESO"="BostDESO", "from_ar"="Ar")) %>% #add income decile of destination
+#   rename(inc_decile = decile) %>%
+#   left_join(lisa_dt[,.(PersonLopNr, from_ar = Ar, ma_above)], by = c("PersonLopNr", "from_ar")) %>% #add education 
+#   mutate(seg_move = as.factor(seg_move),
+#          seg_move = fct_relevel(seg_move, "0")) #use 0 as reference category
+# 
+# saveRDS(vcs_reg, file="//.../vcs_reg.rds")
+
+#----------------------
+# RQ1 regression
+#----------------------
+
+vcs_reg <- readRDS(file = "//.../vcs_reg.rds")
+
+vcs_reg <- vcs_reg %>%
+  mutate(seg_move = fct_relevel(seg_move, "-1"), # use -1 "deseg" as reference category 
+         Kon = ifelse(Kon == 1, 0, 1), # recode 1-2 (male-female) into 0-1 (male-female) 
+         inc_decile = as.factor(inc_decile))
+
+
+# levels(vcs_reg1$seg_move) #order of the categories
+
+library(broom)
+library(modelr)
+library(nnet)
+
+# model with only income decile of destination as independent variable
+rq1_inc <- multinom(seg_move ~ inc_decile, data=vcs_reg) 
+summary(rq1_inc)
+
+# model with only education as independent variable
+rq1_edu <- multinom(seg_move ~ ma_above, data=vcs_reg) 
+summary(rq1_edu)
+
+# model with only gender as independent variable
+rq1_gen <- multinom(seg_move ~ Kon, data=vcs_reg) 
+summary(rq1_gen)
+
+# model with only swe_born as independent variable
+rq1_swe <- multinom(seg_move ~ swe_born, data=vcs_reg) 
+summary(rq1_swe)
+
+# overall model
+rq1_reg <- multinom(seg_move ~ Kon + swe_born + inc_decile + ma_above, data=vcs_reg) 
+tidy(rq1_reg) #log-odds
+tidy(rq1_reg, exponentiate = T, conf.int = T) #odds ratio
+
+# model with interaction between income and swe_born
+rq1_reg2 <- multinom(seg_move ~ inc_decile + ma_above + Kon + swe_born + inc_decile*swe_born, data=vcs_reg) 
+
+
+```
+
+```{r}
+# Table - regression rq1
+models <- list()
+models[["Income decile"]] <- rq1_inc
+models[["Education"]] <- rq1_edu
+models[["Sex"]] <- rq1_gen
+models[["Born in Sweden"]] <- rq1_swe
+models[["Overall"]] <- rq1_reg
+
+
+library(modelsummary)
+library(kableExtra)
+
+modelsummary(models, fmt=3, shape =  term + statistic ~ model + response,
+             estimate = "estimate", statistic = "conf.int", conf_level = .95,
+             stars = T, #coef_omit = "Intercept", 
+             # coef_rename = c("inc_decile2" = "2nd decile", "inc_decile3" = "3rd decile", 
+             #                 "inc_decile4" = "4th decile", "inc_decile5" = "5th decile", 
+             #                 "inc_decile6" = "6th decile", "inc_decile7" = "7th decile", 
+             #                 "inc_decile8" = "8th decile", "inc_decile9" = "9th decile", 
+             #                 "inc_decile10" = "10th decile", "ma_above" = "Higher education", 
+             #                 "Kon" = "Sex", "swe_born" = "Born in Sweden"),
+             title = "First moves in Stockholm housing market. Multinomial models", 
+             notes = "Data from Statistics Sweden")
+             #output = "rq1_reg.tex") 
+
+modelsummary(rq1_reg2, fmt=3, shape =  term + statistic ~ model + response,
+             estimate = "estimate", statistic = "conf.int", conf_level = .95,
+             stars = T, #coef_omit = "Intercept",
+             coef_rename = c("inc_decile2" = "2nd decile", "inc_decile3" = "3rd decile", 
+                             "inc_decile4" = "4th decile", "inc_decile5" = "5th decile", 
+                             "inc_decile6" = "6th decile", "inc_decile7" = "7th decile", 
+                             "inc_decile8" = "8th decile", "inc_decile9" = "9th decile", 
+                             "inc_decile10" = "10th decile", "ma_above" = "Higher education", 
+                             "Kon" = "Sex", "swe_born" = "Born in Sweden"),
+             title = "First moves in Stockolm housing market. Multinomial model", 
+             notes = "Data from Statistics Sweden")
+             #output = "rq1_reg2.tex")
+
+
+```
+
+```{r}
+#graphs RQ1
+library(ggplot2)
+
+odds <- tidy(rq1_reg, exponentiate = T, conf.int = T) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(model="First moves")
+
+library(ggrepel)
+
+ggplot(odds, aes(estimate, term, color= y.level)) +
+  geom_vline(xintercept = 1, colour = "red", lty = 2) +
+  geom_pointrange(aes(xmin=conf.low, xmax=conf.high, colour = y.level),
+                  position = position_dodge(width = 1/2)) +
+  scale_x_log10(breaks = seq(0.8, 2.2, by=.2)) 
+
+```
+
+
+## RQ2: analysis of the patterns
+
+```{r}
+# 1. Measure degree of segregation of first move
+degree_1 <- vcs_new %>%
+  filter(chain_step == 1) %>%
+  group_by(vc_nr) %>%
+  filter(row_number() == 1) %>%
+  rename(degree_1 = degree)
+
+
+# 2. Sum of degrees of subsequent moves
+degree_seq <- vcs_new %>%
+  filter(chain_step >1) %>%
+  group_by(vc_nr) %>%
+  mutate(sum_degree_seq = sum(degree, na.rm = T)) %>%
+  filter(row_number() == 1)
+
+
+
+# 3. Reinforcing vs countervailing
+patterns <- degree_1 %>%
+  select(vc_nr, degree_1) %>%
+  left_join(degree_seq %>%
+              select(vc_nr, degree_seq = degree), by = "vc_nr")
+
+
+patterns <- patterns %>%
+  drop_na() %>%
+  mutate(pattern = case_when(degree_1 >=0 & degree_seq >= 0 ~ "reinforcing",
+                             degree_1 >=0 & degree_seq < 0 ~ "countervailing",
+                             degree_1 < 0 & degree_seq >= 0 ~ "countervailing",
+                             degree_1 < 0 & degree_seq < 0 ~ "reinforcing"))
+
+patterns %>%
+  group_by(pattern) %>%
+  count(pattern)
+
+lisa_dt <- readRDS(file = "//.../Original_dt/lisa_dt.rds")
+
+
+vcs_patterns <- patterns %>%
+  left_join(vcs_new %>%
+              filter(chain_step == 1) %>%
+              group_by(vc_nr) %>%
+              filter(row_number() == 1) %>%
+              select(vc_nr, absorption, from_lgh, PersonLopNr, from_DESO,to_DESO, Kon, swe_born, from_ar, to_DESO_mean_edu, to_DESO_prop_swe), 
+            by = "vc_nr") %>%
+  left_join(lisa_dt[,.(PersonLopNr, from_ar = as.integer(Ar), ma_above)], by = c("PersonLopNr", "from_ar")) %>%
+  # left_join(deso_stats %>%
+  #             select(BostDESO, Ar, decile) %>%
+  #             rename(from_ar = Ar,
+  #                    from_DESO = BostDESO), 
+  #           by=c("from_DESO", "from_ar")) %>% #add income decile of origin of first person
+  # rename(inc_decile_o = decile) %>%
+  left_join(deso_stats %>%
+              select(BostDESO, Ar, decile) %>%
+              rename(from_ar = Ar,
+                     to_DESO = BostDESO), 
+            by=c("to_DESO", "from_ar")) %>% #add income decile of destination (new building)
+  rename(inc_decile_d= decile) %>%
+  mutate(first_move = ifelse(degree_1 > 0, "seg", ifelse(degree_1 < 0, "deseg", "within")))
+
+saveRDS(vcs_patterns, file="//.../vcs_patterns.rds")
+
+################################
+vcs_patterns <- readRDS(file="//.../vcs_patterns.rds")
+
+
+library(crosstable)
+pat <- vcs_patterns %>%
+  mutate(swedes = ifelse(to_DESO_prop_swe >= 0.5, 1, 0),
+         high_edu = ifelse(to_DESO_mean_edu >= 0.5, 1, 0)) %>%
+  crosstable(c(first_move, swedes, high_edu), by=pattern)
+
+ 
+pat2 <-
+  pat %>%
+    select(-c(.id, label)) %>%
+  kbl(booktabs = T, escape = F, format="latex", #type = "text" or format="latex
+      caption = "Moving patterns in Stockholm housing market",
+      col.names = c(" ", "Countervailing", "Reinforcing")) %>%
+  kable_styling(full_width = T, latex_options = c("striped", "hold_position")) %>%
+    add_header_above(c(" " = 1, "Pattern" = 2)) %>%
+    pack_rows("First move", 1,3) %>%
+    pack_rows("DeSO prop of Swedes", 4,5)%>%
+    pack_rows("DeSO education level", 6,7)
+writeLines(pat2, "pat.tex")
+
+```
+
+```{r}
+# Graphs
+
+theme_set(theme_bw())
+vcs_patterns %>%
+  group_by(inc_decile_d) %>%
+  count(pattern) %>%
+  ggplot(aes(inc_decile_d, n, color=pattern, shape=pattern)) +
+  geom_point() +
+  geom_smooth(se=F) +
+  scale_x_continuous(breaks = seq(1, 10))+
+  scale_shape_discrete(name="Pattern", labels=c("Countervailing", "Reinforcing")) +
+  scale_color_brewer(name="Pattern", labels=c("Countervailing", "Reinforcing"), 
+                     palette = "Set2") +
+  # labs(title="Moving patterns by income decile", 
+  #      subtitle = "Based on DeSO of destination",
+  #      caption = "Data from Statistics Sweden") + 
+  xlab("Income decile")
+ggsave("pattern_inc_d.pdf", width = 5, height = 3)
+
+#by type of first move (same graph as above)
+vcs_patterns %>%
+  group_by(inc_decile_d, first_move) %>%
+  count(pattern) %>%
+  ggplot(aes(inc_decile_d, n, color=first_move, shape=pattern, linetype=pattern)) +
+  geom_point() +
+  geom_smooth(se=F) +
+  scale_x_continuous(breaks = seq(1, 10))+
+  scale_shape_discrete(name="Pattern", labels=c("Countervailing", "Reinforcing")) +
+  scale_color_brewer(name="First move", labels=c("Desegregating", "Segregating", "Within"), 
+                    palette = "Set2") +
+  scale_linetype_discrete(name="Pattern", labels=c("Countervailing", "Reinforcing"))+
+  # labs(title="Moving patterns by income decile", 
+  #      subtitle = "Based on DeSO of destination",
+  #      caption = "Data from Statistics Sweden") + 
+  xlab("Income decile")
+ggsave("pattern_1move_incd.pdf", width = 5, height = 3)
+
+scale_fill_brewer(name="Type", labels=c("Desegregating", "Segregating", "Within"), 
+                    palette = "Set2")
+
+```
+
+### Logistic regression (RQ2)
+```{r}
+library(broom)
+library(modelr)
+library(nnet)
+
+vcs_patterns$pattern_b <- ifelse(vcs_patterns$pattern == "countervailing", 1, 0)
+
+vcs_patterns <- vcs_patterns %>%
+  mutate(inc_decile_d = as.factor(inc_decile_d), #analysis only with income decile of destination
+         pattern_b = as.factor(pattern_b))
+
+# model with income decile of deso of destination (new building) as indep variable
+rq2_inc <- glm(pattern_b ~ inc_decile_d, data=vcs_patterns,
+               family = "binomial"(link="logit")) 
+summary(rq2_inc)
+
+# model with only mean education of deso of destination as independent variable
+rq2_edu <- glm(pattern_b ~ to_DESO_mean_edu, data=vcs_patterns,
+               family = "binomial"(link="logit")) 
+summary(rq2_edu)
+
+# model with prop of swedes of deso of destination as independent variable
+rq2_swe <- glm(pattern_b ~ to_DESO_prop_swe, data=vcs_patterns,
+               family = "binomial"(link="logit")) 
+summary(rq2_swe)
+
+#Overall model
+rq2_reg <- glm(pattern_b ~ to_DESO_prop_swe + inc_decile_d + to_DESO_mean_edu, data=vcs_patterns,
+               family = "binomial"(link="logit")) 
+tidy(rq2_reg) #log-odds
+tidy(rq2_reg, exponentiate = T, conf.int = T) #odds ratio
+
+
+
+# #Divide degree_1 and degree_seq into 10 categories
+# vcs_patterns$d1_decile <- as.factor(cut(vcs_patterns$degree_1, breaks=10, labels=FALSE))
+# vcs_patterns$dseq_decile <- as.factor(cut(vcs_patterns$degree_seq, breaks=10, labels=FALSE))
+# 
+# rq2_degree <- multinom(dseq_decile ~  d1_decile, data=vcs_patterns)
+# summary(rq2_degree)
+# 
+# rq2_degree2 <- glm(pattern_b  ~ d1_decile, data=vcs_patterns)
+# 
+# rq2_reg2 <- glm(pattern_b ~ d1_decile + Kon + swe_born + inc_decile_d + ma_above, data=vcs_patterns,
+#                family = "binomial"(link="logit")) 
+
+```
+
+
+```{r}
+# Table regression rq2
+models2 <- list()
+models2[["DeSO income decile"]] <- rq2_inc
+models2[["DeSO education"]] <- rq2_edu
+models2[["DeSO prop of Swedes"]] <- rq2_swe
+models2[["Overall"]] <- rq2_reg
+
+library(stargazer)
+
+stargazer(models2, header=F, type="text",
+          title = "Moving patterns in Stockolm housing market. Logistic regression models", 
+            notes = "Data from Statistics Sweden")
+
+library(modelsummary)
+library(kableExtra)
+
+modelsummary(models2, fmt=3, shape =  term + statistic ~ model,
+             estimate = "estimate", statistic = "conf.int", conf_level = .95,
+             stars = T, #coef_omit = "Intercept", 
+             coef_map = c("(Intercept)" = "(Intercept)", "inc_decile_d2" = "2nd decile",
+                          "inc_decile_d3" = "3rd decile","inc_decile_d4" = "4th decile",
+                          "inc_decile_d5" = "5th decile","inc_decile_d6" = "6th decile",
+                          "inc_decile_d7" = "7th decile", "inc_decile_d8" = "8th decile",
+                          "inc_decile_d9" = "9th decile", "inc_decile_d10" = "10th decile",
+                          "to_DESO_mean_edu" = "Mean education", "to_DESO_prop_swe" = "Proportion of Swedes"),
+             title = "Moving patterns in Stockholm housing market. Logistic regression models", 
+             notes = "Data from Statistics Sweden") 
+             #output = "rq2_reg.tex")
+
+levels(vcs_patterns$pattern_b)[1] #1 = countervailing is the reference category
+
+
+```

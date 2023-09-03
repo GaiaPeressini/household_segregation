@@ -1,0 +1,170 @@
+---
+title: "Create chains"
+author: "Gaia Peresini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE)
+```
+
+```{r}
+# Libraries
+library(tidyverse)
+library(data.table)
+```
+
+```{r}
+# Load data
+new_building_vacancies2 <- readRDS(file="//.../new_building_vacancies2.rds")
+hushall_dt2 <- readRDS(file="//.../hushall_dt2.rds")
+deceased_dt <- readRDS(file = "//.../Original_dt/deceased_dt.rds")
+lgh_info <- readRDS(file = "//.../lgh_info.rds")
+hushall_mobility_dt <- readRDS(file = "//.../hushall_mobility_dt.rds")
+kommun_vec <- readRDS(file ="//.../kommun_vec.rds")
+
+```
+
+
+```{r}
+# --Code from Pablo Bello--
+
+### Create initiating moves dataset
+
+# Vacancies by creation of new apartments
+initiating_moves1 <-
+  new_building_vacancies2 %>%
+  distinct(lgh_id, .keep_all = TRUE) %>%
+  select(lgh_id,vacancy_year) %>%
+  mutate(init = "new_apartment") 
+
+# Vacancies by death of all hh members
+
+initiating_moves2 <-
+  bind_rows(hushall_dt2) %>%
+  right_join(lgh_info %>% filter(Kommun %in% kommun_vec), by = "lgh_id") %>%
+  left_join(deceased_dt %>%
+              mutate(
+                y = as.character(ifelse(m < 10, y - 1,y)), # To match to date of register (October?)
+                deceased_date = lubridate::make_date(year = y,month = m)) %>%
+              rename(Ar = y,
+                     PersonLopNr = PersonNrLopNr), by = c("PersonLopNr","Ar")) %>%
+  mutate(deceased = ifelse(is.na(deceased_date) == FALSE,TRUE,FALSE)) %>%
+  group_by(lgh_id,Ar) %>%
+  summarise(d = sum(deceased), n = n(), deceased_date) %>%
+  filter(d == n) %>%
+  rename(vacancy_year = Ar) %>%
+  group_by(vacancy_year) %>%
+  distinct(lgh_id) %>% 
+  mutate(init = "deceased")  
+
+
+# Vacancies by out-migration(within Sweden)
+
+inside <- lgh_info %>% filter(Kommun %in% kommun_vec) %>%  pull(lgh_id)
+
+# Hh in Stockholm for which every member moved at the same time to an apartment outside
+initiating_moves3 <-
+  hushall_mobility_dt %>%
+  filter(from_lgh %in% inside) %>%
+  left_join(lgh_info %>% rename(to_lgh = lgh_id), by = "to_lgh") %>%
+  group_by(from_ar,from_lgh) %>%
+  summarise(to_n = n_distinct(to_lgh), inside_n = uniqueN(to_lgh[!Kommun %in% kommun_vec])) %>%
+  filter(to_n == inside_n) %>%
+  transmute(vacancy_year = from_ar,
+         lgh_id = from_lgh,
+         init = "out_move")
+
+initiating_moves <-
+  bind_rows(initiating_moves1,initiating_moves2,initiating_moves3) %>%
+  select(-from_ar) 
+  
+saveRDS(initiating_moves, file = "//.../initiating_moves.rds")
+
+# ## Create sample to test the function that creates the chains
+# init_moves_sample <- initiating_moves  %>%
+#   group_by(init) %>%  # For stratified sample
+#   slice_sample(n = 1000)  # option 1: 1000 per init
+#   #slice_sample(prop = .7)  # option 2
+#
+# saveRDS(init_moves_sample, file = "//.../init_moves_sample.rds")
+
+rm(list=ls()) #clean the environment before continuing to next chunk
+
+```
+
+
+```{r}
+# --Code based on Pablo Bello's work, modifications include the trace_splits_function--
+
+## TRACE CHAINS
+
+# Function to trace chains
+source("//micro.intra/projekt/P0515$/P0515_Gem/Gaia/Thesis/Scripts_v2/trace_chain_function.R")
+
+# Function to trace splits
+source("//micro.intra/projekt/P0515$/P0515_Gem/Gaia/Thesis/Scripts_v2/trace_splits_function.R")
+
+
+
+# Load (sample) data
+# init_moves_sample <- readRDS(file = "//.../init_moves_sample.rds") %>%
+#   mutate(vacancy_year = as.integer(vacancy_year))
+
+hushall_mobility_dt <- readRDS(file = "//.../hushall_mobility_dt.rds") %>%
+  mutate(from_ar = as.integer(from_ar))
+lgh_info <- readRDS(file="//.../lgh_info.rds")
+
+init_moves <- readRDS(file = "//.../initiating_moves.rds") %>%
+  mutate(vacancy_year = as.integer(vacancy_year))
+kommun_vec <- readRDS(file="//.../kommun_vec.rds")
+
+vcs <- list()
+gc_iters <- seq(1,nrow(init_moves),250) #sequence for garbage collector function gc()
+
+#split_loop <- c(1026,13249,24108,25846,37067,40986)
+
+
+for(i in 1:nrow(init_moves)){
+  
+  # set current
+  cv <- init_moves[i,]$lgh_id # The new apartment (first vacancy)
+  cy <- init_moves[i,]$vacancy_year
+  init <- init_moves[i,]$init
+  
+  # run
+  vcs [[i]] <- trace_chain(current_vac = cv, 
+                           current_year = cy,
+                           iter = 1,
+                           split = 0
+  )
+  
+  vcs[[i]]$init <- init   
+  
+  print(paste0('--',round(i/nrow(init_moves),2)*100,'% --', "chain: ", i))
+  if(i%in%gc_iters){gc()} #gc() releases memory when an object is no longer used
+}
+
+
+vcs <- bind_rows(vcs, .id = "vc_nr") 
+saveRDS(vcs, file = "//.../vcs.rds")
+
+
+```
+
+```{r}
+# Why so many NA in absorption?
+vcs <- as.data.table(vcs)
+
+(count(vcs[is.na(abs)]) / nrow(vcs)) * 100 #55%
+
+vcs$abs <- as.factor(vcs$abs)
+table(vcs$abs, useNA = "always")
+table(vcs$init, useNA = "always")
+with(vcs, table(init, abs, useNA = "ifany"))
+
+# when chain_step = na, there is an absorption
+# actually also in original vcs created with Bello's script the NAs in absorption are 55%
+
+```

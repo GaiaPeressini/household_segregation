@@ -1,0 +1,304 @@
+---
+title: "Maps"
+author: "Gaia Peresini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE)
+```
+
+## Geodata maps
+
+```{r}
+# Libraries
+library(tidyverse)
+library(tmap)
+library(sf)
+library(rgdal)
+library(leaflet)
+library(ggplot2)
+
+map <- st_read("//.../GIS/DeSO_region.shp") 
+
+#--------------------------------------------------------------------
+# Stockholm DeSO map (without "external" DeSOs) and proportion of Swedes
+
+# add var to map for county and kommun
+map2 <- map %>%
+  mutate(lan = substr(Deso, 1, 2),
+         kommun = substr(Deso, 1, 4))
+
+
+deso_stats <- readRDS(file = "//.../deso_stats.rds")
+
+stk_map <- merge(map2 %>%
+                   filter(lan=="01"), 
+                 deso_stats, by.x="Deso", by.y="BostDESO")
+
+stk_map <- stk_map %>%
+  mutate(prop_swe = cut(prop_swe, breaks = seq(0,1,0.1)),
+         mean_inc = ntile(mean_inc, 10))
+
+library(ggthemes)
+
+#------------------------
+# PROP_SWE
+#------------------------
+# Stockholm county by year
+ggplot(stk_map)+
+  geom_sf(aes(fill=prop_swe, geometry=geometry))+
+  scale_fill_brewer(direction =-1, name="Born in Sweden (%)")+
+  facet_wrap(~ Ar) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Proportion of people born in Sweden per DeSO per year",
+       subtitle = "Stockholm county",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "br", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("county_prop_swe.pdf", width = 5, height = 4.5)
+
+# Stockholm city by year
+stk_map %>%
+  filter(kommun == "0180") %>%
+  ggplot()+
+  geom_sf(aes(fill=prop_swe, geometry=geometry))+
+  scale_fill_brewer(direction =-1, name="Born in Sweden (%)")+
+  facet_wrap(~ Ar) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Proportion of people born in Sweden per DeSO per year",
+       subtitle = "Stockholm city",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "bl", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("city_prop_swe.pdf", width = 6, height = 4)
+
+```
+
+
+```{r}
+#------------------------
+# INCOME
+#------------------------
+library(RColorBrewer)
+brewer.pal(9, "Blues")
+my_blues <- colorRampPalette(brewer.pal(9, "Blues"))(10) #expand palette
+
+
+# Stockholm county by year
+ggplot(stk_map)+
+  geom_sf(aes(fill=as.factor(mean_inc), geometry=geometry))+
+  scale_fill_manual(values = rev(my_blues), name="Income decile")+
+  facet_wrap(~ Ar) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Income decile per DeSO per year",
+       subtitle = "Stockholm county",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "br", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("county_inc_dec.pdf", width = 5, height = 4.5)
+
+
+# Stockholm city by year
+stk_map %>%
+  filter(kommun == "0180") %>%
+  ggplot()+
+  geom_sf(aes(fill=as.factor(mean_inc), geometry=geometry))+
+  scale_fill_manual(values =rev(my_blues), name="Income decile")+
+  facet_wrap(~ Ar) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Income decile per DeSO per year",
+       subtitle = "Stockholm city",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "bl", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("city_inc_dec.pdf", width = 6, height = 4)
+
+```
+
+
+```{r}
+#------------------------
+# NEW BUILDINGS - by DeSo location 
+#------------------------
+
+new_buildings <- readRDS(file="//.../new_building_vacancies2.rds")
+geo_dt <- readRDS(file = "//.../Original_dt/geo_dt.rds")
+
+new_buildings <- new_buildings %>%
+  select(lgh_id, year_of_building_creation) %>%
+  left_join(geo_dt %>%
+              mutate(lgh_id = LopNr_RNPLGH_RIDLGH) %>%
+              select(lgh_id, BostDESO), 
+            by = "lgh_id") %>%
+  mutate(year_of_building_creation = as.integer(year_of_building_creation))
+
+# Number of new dwellings per DeSO per year
+new_buildings %>%
+  group_by(BostDESO, year_of_building_creation) %>%
+  count()
+
+# Add geometry variable from the map object
+newb_map <- new_buildings %>%
+  rename(Deso = BostDESO) %>%
+  group_by(Deso, year_of_building_creation) %>%
+  count() %>%
+  left_join(map2, by = "Deso")
+
+# Stockholm county by year
+ggplot() +
+  geom_sf(data=stk_map, aes(geometry=geometry)) +
+  stat_sf_coordinates(data=newb_map, aes(color=as.factor(year_of_building_creation),
+                                         fill=as.factor(year_of_building_creation), 
+                                         size = n, geometry=geometry),
+                      shape=21, colour="black") +
+  scale_fill_brewer(name = "Year of construction", palette = "Set2") +
+  facet_wrap(~ year_of_building_creation) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "New buildings location per year",
+       subtitle = "Stockholm county",
+       caption = "Data from Statistics Sweden")+
+  ggspatial::annotation_scale(location = "br", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("county_build.pdf", width = 5, height = 4.5)
+
+  
+# Stockholm city by year
+ggplot() +
+  geom_sf(data=stk_map %>%
+            filter(kommun == "0180"), aes(geometry=geometry)) +
+  stat_sf_coordinates(data=newb_map %>%
+                        filter(kommun == "0180"), aes(color=as.factor(year_of_building_creation),
+                                         fill=as.factor(year_of_building_creation), 
+                                         size = n, geometry=geometry),
+                      shape=21, colour="black") +
+  scale_fill_brewer(name = "Year of construction", palette = "Set2") +
+  facet_wrap(~ year_of_building_creation) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "New buildings location per year",
+       subtitle = "Stockholm city",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "bl", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("city_build.pdf", width = 6, height = 4)
+
+```
+
+
+```{r}
+#------------------------
+# RQ1
+#------------------------
+vcs <- readRDS(file="//.../vcs_complete.rds")
+
+vcs_new <- vcs %>%
+  mutate(move = ifelse(test = degree > 0, yes = "seg", 
+                       no = ifelse(test = degree < 0, yes = "deseg", no = "same_deso"))) %>%
+  filter(initiation == "new_apartment",
+         is.na(move) == FALSE) %>%
+  mutate(move = as.factor(move),
+         move = fct_relevel(move, c("deseg", "seg", "same_deso")))
+
+
+first_move_map2 <- 
+  vcs_new %>%
+  filter(chain_step == 1) %>%
+  rename(Deso = to_DESO) %>%
+  select(Deso, degree, from_ar) %>%
+  mutate(ar = from_ar +1)%>%
+  group_by(Deso) %>%
+  summarise(degree_deso = sum(degree)) %>%
+  mutate(move_deso = ifelse(degree_deso >0, "seg", ifelse(degree_deso < 0, "deseg", "within"))) %>%
+  left_join(map2, by = "Deso")
+
+# Stockholm county
+ggplot() +
+  geom_sf(data=stk_map, aes(geometry=geometry)) +
+  geom_sf(data=first_move_map2, aes(fill=move_deso, geometry=geometry)) +
+  scale_fill_brewer(name = "First move", labels=c("Desegregating", "Segregating", "Neutral"),
+                    palette = "Set2") +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Type of first move by DeSO",
+       subtitle = "Based on degree of segregation. Stockholm county",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "br", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("county_1move.pdf", width = 4, height = 5)
+
+
+# Stockholm city by year
+ggplot() +
+  geom_sf(data=stk_map %>%
+            filter(kommun == "0180"), aes(geometry=geometry)) +
+  geom_sf(data=first_move_map2 %>%
+                        filter(kommun == "0180"), aes(fill=move_deso, geometry=geometry)) +
+  scale_fill_brewer(name = "First move", labels=c("Desegregating", "Segregating", "Neutral"),
+                    palette = "Set2") +
+  #facet_wrap(~ year_of_building_creation) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Type of first move by DeSO",
+       subtitle = "Based on degree of segregation. Stockholm city",
+       caption = "Data from Statistics Sweden")+
+  ggspatial::annotation_scale(location = "bl", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("city_1move.pdf", width = 4, height = 5)
+
+```
+
+
+```{r}
+#------------------------
+# RQ2
+#------------------------
+vcs_patterns <- readRDS(file="//.../vcs_patterns.rds")
+
+
+pattern_map2 <- 
+  vcs_patterns %>%
+  rename(Deso = to_DESO) %>%
+  select(Deso, degree_1, degree_seq, from_ar) %>%
+  mutate(ar = from_ar +1)%>%
+  group_by(Deso) %>%
+  summarise(degree1_deso = sum(degree_1),
+            degreeseq_deso = sum(degree_seq)) %>%
+  mutate(pattern_deso = case_when(degree1_deso >=0 & degreeseq_deso >= 0 ~ "reinforcing",
+                                  degree1_deso >=0 & degreeseq_deso < 0 ~ "countervailing",
+                                  degree1_deso < 0 & degreeseq_deso >= 0 ~ "countervailing",
+                                  degree1_deso < 0 & degreeseq_deso < 0 ~ "reinforcing")) %>%
+  left_join(map2, by = "Deso")
+
+# Stockholm county
+ggplot() +
+  geom_sf(data=stk_map, aes(geometry=geometry)) +
+  geom_sf(data=pattern_map2, aes(fill=pattern_deso, geometry=geometry)) +
+  scale_fill_brewer(name="Pattern", labels=c("Countervailing", "Reinforcing"),
+                    palette = "Set2") +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Type of moving pattern by DeSO",
+       subtitle = "Based on degree of segregation. Stockholm county",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "br", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("county_pattern.pdf", width = 4, height = 5)
+
+
+# Stockholm city by year
+ggplot() +
+  geom_sf(data=stk_map %>%
+            filter(kommun == "0180"), aes(geometry=geometry)) +
+  geom_sf(data=pattern_map2 %>%
+                        filter(kommun == "0180"), aes(fill=pattern_deso, geometry=geometry)) +
+  scale_fill_brewer(name="Pattern", labels=c("Countervailing", "Reinforcing"),
+                    palette = "Set2") +
+  #facet_wrap(~ year_of_building_creation) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  labs(title = "Type of moving pattern by DeSO",
+       subtitle = "Based on degree of segregation. Stockholm city",
+       caption = "Data from Statistics Sweden") +
+  ggspatial::annotation_scale(location = "bl", line_width = .5, bar_cols = c("grey", "white"))
+ggsave("city_pattern.pdf", width = 5, height = 4)
+
+
+```

@@ -1,0 +1,333 @@
+---
+title: "Data preparation"
+author: "Gaia Peresini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE)
+```
+
+## 1. Download data 
+
+```{r}
+# Libraries
+library(tidyverse)
+library(data.table)
+library(RODBC)
+
+# Create connection to the server
+odbcCloseAll()
+# myconn <- odbcDriverConnect(connection = paste("setting for accessing the server") 
+```
+
+
+### a. Individual information (Lisa)
+
+```{r}
+# Fetch data
+var.names <- c("PersonalNr", "Ar", "Kommun", "edu_level", "income", "birth_country")
+
+dt_list <- list()
+
+j <- 0
+for (i in 2012:2017) {
+  j <- j+1
+  print(j)
+  tb <- paste0("LISA", i, "_individ")
+  dt_list[[j]] <- sqlQuery(myconn, paste('select ', paste(var.names, collapse = ','),
+                               ' from ', tb, sep = ''))
+}
+names(dt_list) <- c(2012:2017)
+dt_list <- lapply(dt_list, as.data.table)
+lisa_dt <- rbindlist(dt_list, use.names=T, fill=T)
+
+# save RDS file
+saveRDS(lisa_dt, file = "//.../Original_dt/lisa_dt.rds")
+
+```
+
+
+### a.1 Background data (Background)
+
+```{r}
+tb <- "Bakgrundsdata"
+var.names <- c("PersonalNr", "sex", "birth_year", "birth_country_code")
+
+# Fetch data
+bkg_dt <- sqlQuery(myconn, paste('select ', paste(var.names, collapse = ','),
+                               ' from ', tb, sep = ''))
+bkg_dt <- as.data.table(bkg_dt)
+
+bkg_dt$swe_born <- ifelse(test = bkg_dt$birth_country_code==1,yes = 1, no = 0)
+bkg_dt[is.na(swe_born),swe_born:=0]
+
+mean(bkg_dt$swe_born)
+
+# save RDS file
+saveRDS(bkg_dt, file = "//...//Original_dt/bkg_dt.rds")
+
+```
+
+
+### b. Housing information (Hushall)
+
+```{r}
+# Fetch data
+
+# these variables are related to housing characteristics, such as number of rooms, kitchen type or construction year
+var.names <- c("PersonalNr", "LopNr_RNPLGH_RIDLGH", "LopNrFastighet", "SCB_Agarkat", "antrum",
+               "SCB_Upplatform", "boarea", "SCB_Bostkat", "koktyp", "LGHKAT", "SCB_Byggar")
+
+dt_list <- list()
+
+j <- 0
+for (i in 2012:2017) {
+  j <- j+1
+  print(j)
+  tb <- paste0("RTB_Hushall_", i)
+  dt_list[[j]] <- sqlQuery(myconn, paste('select ', paste(var.names, collapse = ','),
+                               ' from ', tb, sep = ''))
+}
+names(dt_list) <- c(2012:2017)
+
+# Add column to each list with the register year
+for (i in seq_along(dt_list)) {
+  dt_list[[i]]$Ar <- names(dt_list)[i]
+}
+
+dt_list <- lapply(dt_list, as.data.table)
+hushall_dt <- rbindlist(dt_list, use.names=T, fill=T)
+
+# save RDS file
+saveRDS(hushall_dt, file = "//.../Original_dt/hushall_dt.rds")
+
+
+```
+
+
+### c. Geographic data (Geo)
+
+```{r}
+# Fetch data
+var.names <- c("PersonalNr", "LopNrFastighet", "LopNr_RNPLGH_RIDLGH","Kommun", "BostDESO", "BostrutaX", "BostrutaY", "county")
+
+
+dt_list <- list()
+
+j <- 0
+for (i in 2012:2017) {
+  j <- j+1
+  print(j)
+  tb <- paste0("Geo", i)
+  dt_list[[j]] <- sqlQuery(myconn, paste('select ', paste(var.names, collapse = ','),
+                               ' from ', tb, sep = ''))
+}
+names(dt_list) <- c(2012:2017)
+
+# Add column to each list with the register year
+for (i in seq_along(dt_list)) {
+  dt_list[[i]]$Ar <- names(dt_list)[i]
+}
+
+dt_list <- lapply(dt_list, as.data.table)
+geo_dt <- rbindlist(dt_list, use.names=T, fill=T)
+
+# save RDS file
+saveRDS(geo_dt, file = "//.../Original_dt/geo_dt.rds")
+
+
+```
+
+
+
+## d. Deceased people
+
+```{r}
+tb <- "Doda_201904"
+var.names <- c("PersonalNr", "death_date")
+
+# Fetch data
+deceased_dt <- sqlQuery(myconn, paste('select ', paste(var.names, collapse = ','),
+                               ' from ', tb, sep = ''))
+
+deceased_dt <- as.data.table(deceased_dt)
+deceased_dt[,y := substr(death_date, start = 1, stop = 4)] #extract year
+deceased_dt[,m := substr(death_date, start = 5, stop = 6)] #extract month
+deceased_dt <- deceased_dt[,.(PersonalNr ,y=as.numeric(y),m=as.numeric(m))]
+deceased_dt[,.(.N),by=y][order(y)]
+deceased_dt <- deceased_dt[y>=2011]
+
+# save RDS file
+saveRDS(deceased_dt, file = "//.../Original_dt/deceased_dt.rds")
+
+# Close connection to server
+odbcCloseAll()
+
+```
+
+
+## 2. Extract data needed for the study and create datasets
+
+```{r}
+# -------------------------------------------------------
+# - Create mobility data set
+# -------------------------------------------------------
+# --Code from Pablo Bello--
+
+# Create reduced (and annually split) form of "hushall_dt"
+hushall_dt2 <- hushall_dt[,.(PersonalNr,
+                             lgh_id=LopNr_RNPLGH_RIDLGH,Ar)] #lgh_id is the id of the dwelling
+
+hushall_dt2 <- hushall_dt2[complete.cases(hushall_dt2)]
+hushall_dt2 <- split(hushall_dt2,hushall_dt2$Ar)
+saveRDS(hushall_dt2, file = "//.../hushall_dt2.rds")
+
+# Create mobility data table by merging t with t+1
+hushall_mobility_dt <- list()
+for(t in 1:(length(hushall_dt2)-1)){
+  hushall_mobility_dt[[t]] <- merge(x = hushall_dt2[[t]][,.(PersonalNr,
+                                                            from_lgh=lgh_id,
+                                                            from_Year=Ar)],
+                                    y = hushall_dt2[[t+1]][,.(PersonalNr,
+                                                              to_lgh=lgh_id)],
+                                    by=c('PersonalNr'))
+  print(t)
+}
+hushall_mobility_dt <- rbindlist(hushall_mobility_dt,use.names = T, fill = T)
+
+# -------------------------------------------------------
+
+# -------------------------------------------------------
+# - Identify cases where the whole household moves
+# -------------------------------------------------------
+
+# Household-size variables
+hushall_mobility_dt[,from_size := .N,by=c('from_lgh','from_Year')]
+hushall_mobility_dt[,to_size := .N,by=c('to_lgh','from_Year')]
+saveRDS(hushall_mobility_dt, file = "//.../hushall_mobility_dt.rds")
+
+
+# - classify mobility events "as the whole household moving" when the target has more than the origin
+whole_houshold_moving <- hushall_mobility_dt[to_size>=from_size & from_lgh!=to_lgh]
+
+# - skip individual-level-information, and just keep the dyad lgh_id (+year) of the whole household 
+whole_houshold_moving2 <- unique(whole_houshold_moving[,.(from_lgh,to_lgh,from_Year)])
+
+
+# -------------------------------------------------------
+# - Identify municipality for apartment-id
+# -------------------------------------------------------
+lgh_info <- list()
+lisa_dt$Ar <- as.character(lisa_dt$Ar)
+for(i in 1:length(hushall_dt2)){
+  lgh_info[[i]] <- merge(x=hushall_dt2[[i]],
+                         y=lisa_dt[Ar==unique(hushall_dt2[[i]]$Ar)],
+                         by=c('PersonalNr','Ar'))
+  lgh_info[[i]] <- unique(lgh_info[[i]][,.(lgh_id,Kommun,Ar)],by=c('lgh_id','Kommun','Ar'))
+  print(i)
+}
+lgh_info <- rbindlist(lgh_info,use.names = T, fill = T)
+lgh_info <- unique(lgh_info[,.(lgh_id,Kommun)])
+
+saveRDS(lgh_info, file = "//.../lgh_info.rds")
+
+
+# -------------------------------------------------------
+# - Trace vacancy chains created by moves to new apartment-buildings
+# -------------------------------------------------------
+
+# - Identify new-built apartments
+new_building_vacancies <- unique(hushall_dt[Ar>=2013 & Ar==SCB_Byggar][,.(LopNr_RNPLGH_RIDLGH,
+                                                                          LopNrFastighet,
+                                                                          Ar)])
+setnames(new_building_vacancies,'Ar','year_of_building_creation')
+new_building_vacancies <- unique(new_building_vacancies[,.(LopNr_RNPLGH_RIDLGH,
+                                                           year_of_building_creation)])
+new_building_vacancies[,vacancy_year := as.character(as.integer(year_of_building_creation)-1)]
+setnames(new_building_vacancies,'LopNr_RNPLGH_RIDLGH','lgh_id')
+
+
+# - Vacancy dt
+new_building_vacancies2 <- merge(x=new_building_vacancies,
+                                 y=whole_houshold_moving2,
+                                 by.x=c('lgh_id','vacancy_year'),
+                                 by.y=c('to_lgh','from_Year'))
+
+
+# ======================================
+# - Only keep new apartment-buildings created in Stockholm county (Kommun code starting with 01)
+# ======================================
+
+Kommun_vec <-
+  geo_dt %>%
+  distinct(Kommun) %>%
+  filter(Kommun/100 < 2 & Kommun/100 >= 1) %>%
+  pull(Kommun)
+saveRDS(Kommun_vec, file = "//.../Kommun_vec.rds")
+
+
+# * new-built apt
+new_building_vacancies2 <- merge(x=new_building_vacancies2,
+                                 y=lgh_info,
+                                 by.x=c('lgh_id'),
+                                 by.y=c('lgh_id'))
+new_building_vacancies2 <- new_building_vacancies2[Kommun %in% Kommun_vec] # Stockolm county
+new_building_vacancies2[,Kommun := NULL]
+
+saveRDS(new_building_vacancies2, file = "//.../new_building_vacancies2.rds")
+
+
+```
+
+
+## c. Annual DeSO-statistics
+
+```{r}
+## Stockolm county --> county 01
+geo_stk_dt <- geo_dt %>%
+  filter(county == 01)
+
+saveRDS(geo_stk_dt, file = "//.../geo_sub_dt.rds")
+
+# Annual proportion of Swedes by DeSO
+deso_bkg <- merge(x=geo_stk_dt[,.(PersonalNr, Ar, BostDESO)],
+                    y=bkg_dt[,.(PersonalNr, swe_born)],
+                    by="PersonalNr")
+deso_bkg <- deso_bkg[,.(prop_swe = mean(swe_born)), by=c("BostDESO", "Ar")]
+
+# Annual mean disposable income by DeSO
+deso_inc <- geo_stk_dt %>%
+  select(PersonalNr, Ar, BostDESO) %>%
+  mutate(Ar = as.integer(Ar)) %>%
+  left_join(lisa_dt %>%
+              select(PersonalNr, income, Ar) %>%
+              mutate(Ar = as.integer(Ar)),
+            by=c("PersonalNr", "Ar"))
+deso_inc <- deso_inc[,.(mean_inc = mean(income, na.rm=T)), by=c("BostDESO", "Ar")]
+
+# Annual share of people with MA or above by DeSO
+## edu_level: first digit is the level of education --> 5 or above = post-secondary education(2y or longer) and above
+
+lisa_dt$ma_above <- ifelse(test = (lisa_dt$edu_level/100 >= 5 & lisa_dt$edu_level/100 < 7), yes = 1, no = 0)
+saveRDS(lisa_dt, file = "//.../Original_dt/lisa_dt.rds")
+
+deso_edu <- geo_stk_dt %>%
+  select(PersonalNr, Ar, BostDESO) %>%
+  mutate(Ar = as.integer(Ar)) %>%
+  left_join(lisa_dt %>%
+              select(PersonalNr, ma_above, Ar) %>%
+              mutate(Ar = as.integer(Ar)),
+            by=c("PersonalNr", "Ar"))
+
+deso_edu <- deso_edu[,.(mean_edu = mean(ma_above, na.rm=T)), by=c("BostDESO", "Ar")]
+
+
+## Merge annual stats datasets
+deso_stats <- deso_bkg %>%
+  mutate(Ar = as.integer(Ar)) %>%
+  left_join(deso_edu, by=c("BostDESO", "Ar")) %>%
+  left_join(deso_inc, by=c("BostDESO", "Ar"))
+saveRDS(deso_stats, "//.../deso_stats.rds")
+```
