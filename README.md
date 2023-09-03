@@ -1,6 +1,7 @@
 # Household segregation
 Household segregation in saturated housing markets (Master's thesis)
 
+## License
 Shield: [![CC BY 4.0][cc-by-shield]][cc-by]
 
 This work is licensed under a
@@ -13,3 +14,5 @@ This work is licensed under a
 [cc-by-shield]: https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey.svg
 
 
+## Notes on the code
+The names of the variables were changed to reflect their content in the SCB datasets.
