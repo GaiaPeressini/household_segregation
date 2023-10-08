@@ -289,6 +289,19 @@ vcs %>%
 nrow(vcs %>%
   filter(absorption == "split")) / nrow(vcs) * 100 
 
+# number of chains
+vcs_new %>%
+  distinct(vc_nr) %>%
+  count() #9027
+
+# number of occurrencies for each step
+vcs_new %>%
+  count(chain_step)
+
+# number of occurrancies per absorption type 
+# (na are because the chain didn't stop in that entry)
+vcs_new %>%
+  count(absorption)
 ```
 
 
@@ -415,6 +428,22 @@ lisa_dt <- readRDS(file = "//.../Original_dt/lisa_dt.rds") %>%
 
 vcs_edu <- vcs_new %>%
   left_join(lisa_dt[,.(PersonLopNr, from_ar = Ar, ma_above)], by = c("PersonLopNr", "from_ar"))
+
+### TO DEBUG ########
+library(janitor)
+vcs_edu %>%
+  tabyl(ma_above, swe_born) %>%
+  adorn_percentages(denominator = "row") %>%
+  adorn_totals(where = "col") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_ns()
+
+#90% of the nas are swedes
+# sum(is.na(lisa_dt$ma_above)) is 0, but
+# sum(is.na(vcs_edu$ma_above)) is 13239 --> the left join above introduces NAs
+# TO INVESTIGATE
+
+#######################
 
 # First move Segregating or desegragating? (by education)
 vcs_edu %>%
@@ -706,6 +735,31 @@ rq1_reg2 <- multinom(seg_move ~ inc_decile + ma_above + Kon + swe_born + inc_dec
 ```
 
 ```{r}
+# ratios graph
+ci_rq1_reg <- tidy(rq1_reg, exponentiate = T, conf.int = T) %>%
+  mutate(model = "Overall")
+
+
+ci_rq1_reg %>%
+  ggplot(aes(estimate, term)) +
+  geom_vline(xintercept = 1, color = "red", lty = 2) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high, color = y.level),
+                  position = position_dodge(width = 1/2)) +
+  scale_x_log10(breaks = seq(0.2, 2.6, 0.4)) +
+  scale_color_brewer(labels = c("Within DeSO", "Segregating"), palette = "Set2") +
+  scale_y_discrete(lim = rev, labels = c("Born in Sweden", "Higher education", "Sex", 
+                                         "9th decile", "8th decile", "7th decile", 
+                                         "6th decile", "5th decile", "4th decile", 
+                                         "3rd decile", "2nd decile", "10th decile",
+                                         "(Intercept)")) +
+  labs(color = "First move", x = "Odds ratios", y="")
+  
+ggsave("odds_rq1.pdf", width = 6, height = 4)
+  
+
+```
+
+```{r}
 # Table - regression rq1
 models <- list()
 models[["Income decile"]] <- rq1_inc
@@ -949,6 +1003,27 @@ tidy(rq2_reg, exponentiate = T, conf.int = T) #odds ratio
 
 ```
 
+```{r}
+# ratios graph
+ci_rq2_reg <- tidy(rq2_reg, exponentiate = T, conf.int = T) %>%
+  mutate(model = "Overall")
+
+
+ci_rq2_reg %>%
+  ggplot(aes(estimate, term)) +
+  geom_vline(xintercept = 1, color = "red", lty = 2) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high),
+                  position = position_dodge(width = 1/2)) +
+  scale_x_log10(breaks = seq(0.4, 2., 0.4)) +
+  scale_y_discrete(lim = rev, labels = c("Proportion of Swedes", "Mean education", 
+                                         "9th decile", "8th decile", "7th decile", 
+                                         "6th decile", "5th decile", "4th decile", 
+                                         "3rd decile", "2nd decile", "10th decile",
+                                         "(Intercept)")) +
+  labs(x = "Odds ratios", y="")
+  
+ggsave("odds_rq2.pdf", width = 6, height = 4)
+```
 
 ```{r}
 # Table regression rq2
