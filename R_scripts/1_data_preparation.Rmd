@@ -172,6 +172,41 @@ odbcCloseAll()
 
 ```{r}
 # -------------------------------------------------------
+# - Remove people under 18 yo
+# -------------------------------------------------------
+lisa_dt <- lisa_dt %>%
+  left_join(bkg_dt %>%
+              select(PersonLopNr, FodelseAr),
+            by = "PersonLopNr") %>%
+  mutate(Age = Ar - FodelseAr) %>%
+  filter(Age >= 18)
+
+saveRDS(lisa_dt, file = "//.../Original_dt/lisa_dt.rds")
+
+
+hushall_dt <- hushall_dt %>%
+  left_join(bkg_dt %>%
+              select(PersonLopNr, FodelseAr),
+            by = "PersonLopNr") %>%
+  mutate(Ar = as.numeric(Ar),
+         Age = Ar - FodelseAr) %>%
+  filter(Age >= 18)
+
+saveRDS(hushall_dt, file = "//.../Original_dt/hushall_dt.rds")
+
+
+geo_dt <- geo_dt %>%
+  left_join(bkg_dt %>%
+              select(PersonLopNr, FodelseAr),
+            by = "PersonLopNr") %>%
+  mutate(Ar = as.numeric(Ar),
+         Age = Ar - FodelseAr) %>%
+  filter(Age >= 18)
+
+saveRDS(geo_dt, file = "//.../Original_dt/geo_dt.rds")
+
+
+# -------------------------------------------------------
 # - Create mobility data set
 # -------------------------------------------------------
 # --Code from Pablo Bello--
@@ -245,11 +280,11 @@ new_building_vacancies <- unique(hushall_dt[Ar>=2013 & Ar==SCB_Byggar][,.(LopNr_
 setnames(new_building_vacancies,'Ar','year_of_building_creation')
 new_building_vacancies <- unique(new_building_vacancies[,.(LopNr_RNPLGH_RIDLGH,
                                                            year_of_building_creation)])
-new_building_vacancies[,vacancy_year := as.character(as.integer(year_of_building_creation)-1)]
+new_building_vacancies[,vacancy_year := year_of_building_creation-1]
 setnames(new_building_vacancies,'LopNr_RNPLGH_RIDLGH','lgh_id')
 
 
-# - Vacancy dt
+# - Vacancy dt: finding the "from_lgh" for the new buildings
 new_building_vacancies2 <- merge(x=new_building_vacancies,
                                  y=whole_houshold_moving2,
                                  by.x=c('lgh_id','vacancy_year'),
@@ -278,6 +313,13 @@ new_building_vacancies2[,Kommun := NULL]
 
 saveRDS(new_building_vacancies2, file = "//.../new_building_vacancies2.rds")
 
+#hushall dt filterd for stkl county
+h <- hushall_dt %>% 
+  rename(lgh_id = LopNr_RNPLGH_RIDLGH) %>%
+  left_join(lgh_info, 
+            by="lgh_id") %>%
+  filter(Kommun %in% kommun_vec)
+nrow(h)
 
 ```
 
@@ -299,34 +341,29 @@ deso_bkg <- deso_bkg[,.(prop_swe = mean(swe_born)), by=c("BostDESO", "Ar")]
 
 # Annual mean disposable income by DeSO
 deso_inc <- geo_stk_dt %>%
-  select(PersonalNr, Ar, BostDESO) %>%
-  mutate(Ar = as.integer(Ar)) %>%
+  select(PersonLopNr, Ar, BostDESO) %>%
   left_join(lisa_dt %>%
-              select(PersonalNr, income, Ar) %>%
-              mutate(Ar = as.integer(Ar)),
-            by=c("PersonalNr", "Ar"))
+              select(PersonLopNr, DispInkPersF04, Ar),
+            by=c("PersonLopNr", "Ar"))
 deso_inc <- deso_inc[,.(mean_inc = mean(income, na.rm=T)), by=c("BostDESO", "Ar")]
 
 # Annual share of people with MA or above by DeSO
-## edu_level: first digit is the level of education --> 5 or above = post-secondary education(2y or longer) and above
+## Sun2000niva: first digit is the level of education --> 5 or above = post-secondary education(2y or longer) and above, 999 = NA
 
-lisa_dt$ma_above <- ifelse(test = (lisa_dt$edu_level/100 >= 5 & lisa_dt$edu_level/100 < 7), yes = 1, no = 0)
+lisa_dt$ma_above <- ifelse(test = (lisa_dt$Sun2000niva/100 >= 5 & lisa_dt$Sun2000niva/100 < 7), yes = 1, ifelse(lisa_dt$Sun2000niva/100 < 5, yes = 0, no = NA))
 saveRDS(lisa_dt, file = "//.../Original_dt/lisa_dt.rds")
 
 deso_edu <- geo_stk_dt %>%
-  select(PersonalNr, Ar, BostDESO) %>%
-  mutate(Ar = as.integer(Ar)) %>%
+  select(PersonLopNr, Ar, BostDESO) %>%
   left_join(lisa_dt %>%
-              select(PersonalNr, ma_above, Ar) %>%
-              mutate(Ar = as.integer(Ar)),
-            by=c("PersonalNr", "Ar"))
+              select(PersonLopNr, ma_above, Ar),
+            by=c("PersonLopNr", "Ar"))
 
 deso_edu <- deso_edu[,.(mean_edu = mean(ma_above, na.rm=T)), by=c("BostDESO", "Ar")]
 
 
-## Merge annual stats datasets
+## MERGE ANNUAL STATS DATASETS
 deso_stats <- deso_bkg %>%
-  mutate(Ar = as.integer(Ar)) %>%
   left_join(deso_edu, by=c("BostDESO", "Ar")) %>%
   left_join(deso_inc, by=c("BostDESO", "Ar"))
 saveRDS(deso_stats, "//.../deso_stats.rds")

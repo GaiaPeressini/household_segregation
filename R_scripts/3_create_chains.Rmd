@@ -46,7 +46,7 @@ initiating_moves2 <-
   right_join(lgh_info %>% filter(Kommun %in% kommun_vec), by = "lgh_id") %>%
   left_join(deceased_dt %>%
               mutate(
-                y = as.character(ifelse(m < 10, y - 1,y)), # To match to date of register (October?)
+                y = ifelse(m < 10, y - 1,y), # To match to date of register (October?)
                 deceased_date = lubridate::make_date(year = y,month = m)) %>%
               rename(Ar = y,
                      PersonLopNr = PersonNrLopNr), by = c("PersonLopNr","Ar")) %>%
@@ -60,7 +60,7 @@ initiating_moves2 <-
   mutate(init = "deceased")  
 
 
-# Vacancies by out-migration(within Sweden)
+# Vacancies by out-migration (within Sweden)
 
 inside <- lgh_info %>% filter(Kommun %in% kommun_vec) %>%  pull(lgh_id)
 

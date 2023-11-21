@@ -22,6 +22,7 @@ library(data.table)
 # Load datasets
 lgh_info <- readRDS(file = "//.../lgh_info.rds")
 geo_dt <- readRDS(file = "//.../Original_dt/geo_dt.rds")
+geo_dt <- readRDS(file = "//.../geo_sub_dt.rds") #dataset subset for Stockholm and >18yo
 deso_stats <- readRDS(file = "//.../deso_stats.rds")
 bkg_dt <- readRDS(file="//.../Original_dt/bkg_dt.rds")
 vcs <- readRDS(file="//.../vcs.rds") %>%
@@ -215,40 +216,136 @@ library(janitor)
 
 
 # N. seg/deseg fist moves by type of initiation
-first_move_byinit <- vcs[chain_step == 1] %>% 
-  group_by(initiation) %>%
-  count(seg_move) %>%
-   mutate(Move = ifelse(seg_move == -1, "Desegregating", ifelse(seg_move == 1, "Segregating", "Within")),
-         Initiation = ifelse(initiation == "deceased", "Deceased", 
-                             ifelse(initiation == "new_apartment", "New apartment", "Out move"))) %>%
-  rename(Count = n) %>%
-  relocate(Initiation, Move, Count) 
-
-table_vcs_3 <- first_move_byinit[,2:3] %>%
-  kbl(booktabs = T, escape = F, type = "text",
-      caption = "Classification of first moves by type of initiation") %>%
-  kable_styling(full_width = T, latex_options = c("striped", "hold_position")) %>%
-  group_rows("Deceased", 1,4) %>%
-  group_rows("New apartment", 5, 8) %>%
-  group_rows("Out move", 9, 12) 
-writeLines(table_vcs_3, "table_vcs_3.tex")
-
-vcs_3 <- vcs[chain_step == 1] %>%
-  mutate(Move = ifelse(seg_move == -1, "Desegregating", ifelse(seg_move == 1, "Segregating", "Within")),
-         initiation = ifelse(initiation == "deceased", "Deceased", 
-                             ifelse(initiation == "new_apartment", "New apartment", "Out move"))) %>%
-  tabyl(initiation, Move) %>%
+vcs_3b <- vcs %>%
+  mutate(move = ifelse(test = degree > 0, yes = "seg", 
+                       no = ifelse(test = degree < 0, yes = "deseg", no = "same_deso"))) %>%
+  filter(chain_step ==1) %>%
+  tabyl(initiation, move) %>%
   adorn_percentages(denominator = "row") %>%
   adorn_totals(where = "col") %>%
   adorn_pct_formatting(digits = 2) %>%
   adorn_ns() %>%
   kbl(booktabs = T, escape = F, 
       caption = "Classification of first moves by type of initiation", 
-      col.names = c("VC initiation", "Desegregating", "Segregating", "Within", "NA", "Total"),
-      type = "text") %>% #format = "latex" or type = "text"
+      col.names = c("VC initiation", "Desegregating", "Within", "Segregating", "NA", "Total"),
+      type = "latex") %>% #format = "latex" or type = "text"
   kable_styling(full_width = T, latex_options = c("striped", "hold_position")) %>%
   add_header_above(c(" " = 1, "First move"=4, " "=1))
-writeLines(vcs_3, "vcs_3.tex")
+writeLines(vcs_3b, "vcs_3b.tex")
+
+```
+
+
+### Other statistics
+
+```{r}
+vcs_new %>%
+  filter(chain_step == 1) %>%
+  distinct(PersonLopNr) %>%
+  count() 
+
+vcs_new %>%
+  filter(chain_step == 1) %>%
+  distinct(vc_nr) %>%
+  count() 
+
+vcs_new %>%
+  filter(chain_step == 1) %>%
+  mutate(mean_swedes = mean(swe_born), 
+         Kon = ifelse(Kon == 1, 0, 1), #1 female
+         mean_female = mean(Kon))
+
+vcs_edu %>%
+  filter(chain_step == 1) %>%
+  mutate(mean_highedu = mean(ma_above, na.rm = TRUE))
+
+vcs_new %>%
+  filter(chain_step == 1) %>%
+  tabyl(move)
+
+vcs %>%
+  mutate(move = ifelse(test = degree > 0, yes = "seg", 
+                       no = ifelse(test = degree < 0, yes = "deseg", no = "same_deso"))) %>%
+  filter(initiation == "new_apartment",
+         is.na(move) == FALSE) %>%
+  tabyl(move) 
+
+vcs %>%
+  filter(initiation == "new_apartment",
+         is.na(PersonLopNr) == FALSE) %>%
+  mutate(mean_swedes = mean(swe_born), 
+         Kon = ifelse(Kon == 1, 0, 1), #1 female
+         mean_female = mean(Kon)) 
+
+vcs %>%
+  filter(initiation == "new_apartment",
+         is.na(PersonLopNr) == FALSE) %>%
+  left_join(lisa_dt %>%
+              select(PersonLopNr, Ar, ma_above),
+            by = c("PersonLopNr", "from_ar" = "Ar")) %>%
+  mutate(mean_highedu = mean(ma_above, na.rm = TRUE)) 
+
+nrow(vcs %>%
+  filter(initiation == "new_apartment",
+         is.na(PersonLopNr) == FALSE)) 
+  
+kommun_vec <- readRDS(file = "//.../kommun_vec.rds")
+lisa_dt <- readRDS(file = "//.../lisa_dt.rds") %>%
+  mutate(Ar = as.integer(Ar))
+bkg_dt <- readRDS(file="//.../bkg_dt.rds")
+
+lisa_dt %>%
+  filter(Kommun %in% kommun_vec) %>%
+  tabyl(Ar)
+
+lisa_dt %>%
+  filter(Kommun %in% kommun_vec) %>%
+  tabyl(Ar, ma_above) %>%
+  adorn_percentages(denominator = "row") %>%
+  adorn_totals(where = "col") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_ns()
+
+swe_descr <- lisa_dt %>%
+  filter(Kommun %in% kommun_vec) %>%
+  left_join(bkg_dt %>%
+              select(PersonLopNr, swe_born), 
+            by = "PersonLopNr") %>%
+  tabyl(swe_born, Ar) %>%
+  adorn_percentages(denominator = "col") %>%
+  adorn_totals(where = "row") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_ns() %>%
+  kbl(booktabs = T, escape = F, 
+      caption = "Education attainments per year - Stockholm county") 
+      #type = "latex")
+writeLines(swe_descr, "swe_descr.html")
+
+inc_distr <- lisa_dt %>%
+  filter(Kommun %in% kommun_vec) %>%
+  group_by(Ar) %>%
+  summarise(mean = mean(DispInkPersF04), 
+            min = min(DispInkPersF04),
+            max = max(DispInkPersF04),
+            sd = sd(DispInkPersF04)) %>%
+  kbl(booktabs = T, escape = F, 
+      caption = "Distribution of disposable income per year - Stockholm County", 
+      type = "latex") #%>% #format = "latex" or type = "text"
+  #kable_styling(full_width = T, latex_options = c("striped", "hold_position")) 
+writeLines(inc_distr, "inc_distr.tex")
+
+edu_descr <- lisa_dt %>%
+  filter(Kommun %in% kommun_vec) %>%
+  tabyl(ma_above, Ar) %>%
+  adorn_percentages(denominator = "col") %>%
+  adorn_totals(where = "row") %>%
+  adorn_pct_formatting(digits = 2) %>%
+  adorn_ns() %>%
+  kbl(booktabs = T, escape = F, 
+      caption = "Education attainments per year - Stockholm county", 
+      type = "latex")
+writeLines(edu_descr, "edu_descr.html")
+
 
 ```
 
@@ -427,9 +524,11 @@ lisa_dt <- readRDS(file = "//.../Original_dt/lisa_dt.rds") %>%
   mutate(Ar = as.integer(Ar))
 
 vcs_edu <- vcs_new %>%
-  left_join(lisa_dt[,.(PersonLopNr, from_ar = Ar, ma_above)], by = c("PersonLopNr", "from_ar"))
+  left_join(lisa_dt %>%
+              select(PersonLopNr, Ar, ma_above),
+            by = c("PersonLopNr", "from_ar" = "Ar"))
 
-### TO DEBUG ########
+# Investigation of NAs in education
 library(janitor)
 vcs_edu %>%
   tabyl(ma_above, swe_born) %>%
@@ -438,12 +537,7 @@ vcs_edu %>%
   adorn_pct_formatting(digits = 2) %>%
   adorn_ns()
 
-#90% of the nas are swedes
-# sum(is.na(lisa_dt$ma_above)) is 0, but
-# sum(is.na(vcs_edu$ma_above)) is 13239 --> the left join above introduces NAs
-# TO INVESTIGATE
-
-#######################
+#90% of the nas are non swedes --> no record of education in the registers
 
 # First move Segregating or desegragating? (by education)
 vcs_edu %>%
@@ -695,10 +789,13 @@ ggsave("scatter_gender.pdf", width = 7, height = 5)
 
 vcs_reg <- readRDS(file = "//.../vcs_reg.rds")
 
+library(forcats)
 vcs_reg <- vcs_reg %>%
   mutate(seg_move = fct_relevel(seg_move, "-1"), # use -1 "deseg" as reference category 
          Kon = ifelse(Kon == 1, 0, 1), # recode 1-2 (male-female) into 0-1 (male-female) 
-         inc_decile = as.factor(inc_decile))
+         inc_decile = as.factor(inc_decile),
+         ma_above = as.factor(ma_above),
+         ma_above = fct_explicit_na(ma_above, "NA"))
 
 
 # levels(vcs_reg1$seg_move) #order of the categories
@@ -747,7 +844,7 @@ ci_rq1_reg %>%
                   position = position_dodge(width = 1/2)) +
   scale_x_log10(breaks = seq(0.2, 2.6, 0.4)) +
   scale_color_brewer(labels = c("Within DeSO", "Segregating"), palette = "Set2") +
-  scale_y_discrete(lim = rev, labels = c("Born in Sweden", "Higher education", "Sex", 
+  scale_y_discrete(lim = rev, labels = c("Born in Sweden", "Higher education", "Education -NA", "Sex", 
                                          "9th decile", "8th decile", "7th decile", 
                                          "6th decile", "5th decile", "4th decile", 
                                          "3rd decile", "2nd decile", "10th decile",

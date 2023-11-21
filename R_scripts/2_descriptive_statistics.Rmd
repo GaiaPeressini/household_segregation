@@ -31,15 +31,13 @@ kommun_vec <- readRDS(file = "//.../kommun_vec.rds")
 ```{r}
 # Population
 lisa_dt %>%
-  mutate(Ar = as.numeric(Ar)) %>%
   filter(Kommun %in% kommun_vec) %>%
   group_by(Ar) %>%
   count()
 
 # Income
 lisa_dt %>%
-  mutate(Ar = as.numeric(Ar),
-         Stkm = ifelse(Kommun %in% kommun_vec, 1, 0)) %>% # 1: Stockholm county, 0 rest of Sweden
+  mutate(Stkm = ifelse(Kommun %in% kommun_vec, 1, 0)) %>% # 1: Stockholm county, 0 rest of Sweden
   group_by(Ar) %>% #Stkm
   summarize(Mean = mean(income, na.rm = T),
             SD = sd(income, na.rm = T),
@@ -49,7 +47,6 @@ lisa_dt %>%
 lisa_dt %>%
   left_join(bkg_dt, by="PersonalNr") %>%
   filter(Kommun %in% kommun_vec) %>%
-  mutate(Ar = as.numeric(Ar)) %>%
   group_by(Ar, swe_born) %>%
   summarize(n = n()) %>%
   mutate(freq = n / sum(n)*100)
@@ -60,7 +57,6 @@ lisa_dt %>%
 lisa_dt %>%
   left_join(bkg_dt, by="PersonalNr") %>%
   filter(Kommun %in% kommun_vec) %>%
-  mutate(Ar = as.numeric(Ar)) %>%
   group_by(Ar, sex) %>%
   summarize(n = n()) %>%
   mutate(freq = n / sum(n)*100)
@@ -68,7 +64,6 @@ lisa_dt %>%
 # Education
 lisa_dt %>%
   filter(Kommun %in% kommun_vec) %>%
-  mutate(Ar = as.numeric(Ar)) %>%
   group_by(Ar, ma_above) %>%
   distinct(PersonalNr) %>%
   summarize(n = n()) %>%
@@ -76,14 +71,13 @@ lisa_dt %>%
 
 # New buildings
 new_building_vacancies2 %>%
-  mutate(Year = as.numeric(year_of_building_creation)) %>%
+  mutate(Year = year_of_building_creation) %>%
   group_by(Year) %>%
   count()
 
 # DeSO
 geo_dt %>%
   filter(Kommun %in% kommun_vec) %>%
-  mutate(Ar = as.numeric(Ar)) %>%
   group_by(Ar) %>%
   distinct(BostDESO) %>%
   count()
